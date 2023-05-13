@@ -279,7 +279,6 @@ func Emit(event string, room interface{}, op ws.OpCode, data map[string]interfac
 	}
 
 	jsonStr := string(jsonData)
-	fmt.Println(jsonStr)
 	room_in_arr, ok := room.([]string)
 
 	if ok {
