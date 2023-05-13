@@ -273,12 +273,6 @@ func Emit(event string, room interface{}, op ws.OpCode, data map[string]interfac
 	Hub.lock.RLock()
 	defer Hub.lock.RUnlock()
 
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		panic(err)
-	}
-
-	jsonStr := string(jsonData)
 	room_in_arr, ok := room.([]string)
 
 	if ok {
