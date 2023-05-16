@@ -24,7 +24,7 @@ var (
 	Epoller *Epoll
 	Hub     *HubStruct
 
-	On = map[string]func(subs Subscriber, op ws.OpCode, data map[string]interface{}){}
+	On = map[string]func(subs *Subscriber, op ws.OpCode, data map[string]interface{}){}
 )
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -142,49 +142,69 @@ func UpgradeConnection(r *http.Request, w http.ResponseWriter) (net.Conn, *bufio
 }
 
 func (s *Subscription) add_next(new_sub *Subscription) {
-	if s.Next == nil {
-		s.Next = new_sub
-	} else {
-		s.Next.add_next(new_sub)
+	here := s
+	for here.Next != nil {
+		here = here.Next
 	}
+	here.Next = new_sub
 }
 
-func (s *Subscription) remove_next(conn *net.Conn) {
-	if s != nil {
-		if s.Subs.Connection == conn {
-			s = nil
+func (s *Subscription) remove_next(subs *Subscriber) *Subscription {
+
+	help_subscription := s
+	if help_subscription.Subs == subs {
+		if help_subscription.Next != nil {
+			help_subscription.Subs = help_subscription.Next.Subs
+			help_subscription.Next = help_subscription.Next.Next
+			return s
 		} else {
-			if s.Next.Subs.Connection == conn {
-				s.Next = s.Next.Next
-			} else {
-				s.Next.remove_next(conn)
-			}
+			return nil
 		}
 	}
+
+	for help_subscription.Next != nil {
+		if help_subscription.Next.Subs == subs {
+			help_subscription.Next = help_subscription.Next.Next
+			return s
+		}
+		help_subscription = help_subscription.Next
+	}
+	return s
+}
+
+func remove_element_from_array(strings_in_array []string, string_to_remove string) []string {
+	deleteIndex := -1
+	for i, s := range strings_in_array {
+		if s == string_to_remove {
+			deleteIndex = i
+			break
+		}
+	}
+	if deleteIndex != -1 {
+		copy(strings_in_array[deleteIndex:], strings_in_array[deleteIndex+1:])
+		strings_in_array = strings_in_array[:len(strings_in_array)-1]
+	}
+	return strings_in_array
 }
 
 func (subs *Subscriber) AddToRoom(room string) {
 	Hub.lock.Lock()
 	defer Hub.lock.Unlock()
-	subs.Room = append(subs.Room, room)
 	new_subscription := Subscription{subs, nil}
+
 	if Hub.Subs[room] == nil {
 		Hub.Subs[room] = &new_subscription
 	} else {
 		Hub.Subs[room].add_next(&new_subscription)
 	}
+	subs.Room = append(subs.Room, room)
 }
 
 func (subs *Subscriber) RemoveFromRoom(room string) {
 	Hub.lock.Lock()
 	defer Hub.lock.Unlock()
-	subs.Room = append(subs.Room, room)
-	new_subscription := Subscription{subs, nil}
-	if Hub.Subs[room] == nil {
-		Hub.Subs[room] = &new_subscription
-	} else {
-		Hub.Subs[room].remove_next(subs.Connection)
-	}
+	subs.Room = remove_element_from_array(subs.Room, room)
+	Hub.Subs[room].remove_next(subs)
 }
 
 func (e *Epoll) Add(new_subscriber *Subscriber) error {
@@ -201,8 +221,8 @@ func (e *Epoll) Add(new_subscriber *Subscriber) error {
 	return nil
 }
 
-func (e *Epoll) Remove(sub Subscriber) error {
-	fd := websocketFD(&sub)
+func (e *Epoll) Remove(sub *Subscriber) error {
+	fd := websocketFD(sub)
 	err := unix.EpollCtl(e.Fd, syscall.EPOLL_CTL_DEL, fd, nil)
 	if err != nil {
 		return err
@@ -213,15 +233,19 @@ func (e *Epoll) Remove(sub Subscriber) error {
 	Hub.lock.Lock()
 	defer Hub.lock.Unlock()
 	for _, room := range sub.Room {
-		Hub.Subs[room].remove_next(sub.Connection)
+		Hub.Subs[room] = Hub.Subs[room].remove_next(sub)
 
+		if Hub.Subs[room] == nil {
+			delete(Hub.Subs, room)
+		}
 	}
+	sub = nil
 	delete(e.Connections, fd)
 
 	return nil
 }
 
-func (e *Epoll) Wait() ([]Subscriber, error) {
+func (e *Epoll) Wait() ([]*Subscriber, error) {
 	events := make([]unix.EpollEvent, 100)
 	n, err := unix.EpollWait(e.Fd, events, 100)
 	if err != nil {
@@ -229,10 +253,10 @@ func (e *Epoll) Wait() ([]Subscriber, error) {
 	}
 	e.lock.RLock()
 	defer e.lock.RUnlock()
-	var connections []Subscriber
+	var connections []*Subscriber
 	for i := 0; i < n; i++ {
 		conn := e.Connections[int(events[i].Fd)]
-		connections = append(connections, *conn)
+		connections = append(connections, conn)
 	}
 	return connections, nil
 }
@@ -246,25 +270,27 @@ func websocketFD(new_subscriber *Subscriber) int {
 }
 
 func (s *Subscription) send_msg_in_room(event string, op ws.OpCode, data map[string]interface{}, msg []byte) {
-	Hub.lock.RLock()
-	defer Hub.lock.RUnlock()
+	if s != nil {
+		Hub.lock.RLock()
+		defer Hub.lock.RUnlock()
 
-	if msg == nil {
-		send_event := socket_message{event, data}
-		send_event_string, err := json.Marshal(send_event)
-		if err != nil {
-			panic(err)
+		if msg == nil {
+			send_event := socket_message{event, data}
+			send_event_string, err := json.Marshal(send_event)
+			if err != nil {
+				panic(err)
+			}
+			msg = []byte(string(send_event_string))
 		}
-		msg = []byte(string(send_event_string))
-	}
-	if *s.Subs.Connection != nil {
-		err := wsutil.WriteServerMessage(*s.Subs.Connection, op, []byte(msg))
-		if err != nil {
-			log.Printf("Failed to send %v", err)
-		}
+		if s.Subs != nil {
+			err := wsutil.WriteServerMessage(*s.Subs.Connection, op, []byte(msg))
+			if err != nil {
+				log.Printf("Failed to send %v", err)
+			}
 
-		if s.Next != nil {
-			s.Next.send_msg_in_room(event, op, nil, []byte(msg))
+			if s.Next != nil {
+				s.Next.send_msg_in_room(event, op, nil, []byte(msg))
+			}
 		}
 	}
 }
