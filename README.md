@@ -11,7 +11,6 @@ ChitoSocket is still under development, you can see the examples in the [ChitoSo
 - https://github.com/sairash/chitosocket-example
 
 *✨Links✨*
-- https://socket.io
 - https://github.com/gobwas/ws
 - https://www.freecodecamp.org/news/million-websockets-and-go-cc58418460bb/
 - https://github.com/sairash/chitosocket-example
