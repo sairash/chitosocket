@@ -298,12 +298,22 @@ func (s *Subscription) send_msg_in_room(event string, op ws.OpCode, data map[str
 		defer Hub.lock.RUnlock()
 
 		if msg == nil {
-			send_event := socket_message{event, data}
-			send_event_string, err := json.Marshal(send_event)
-			if err != nil {
-				panic(err)
+			msg = []byte{}
+			if event != "" {
+				send_event := socket_message{event, data}
+				send_event_string, err := json.Marshal(send_event)
+				if err != nil {
+					panic(err)
+				}
+				msg = []byte(string(send_event_string))
+			} else {
+				send_event_string, err := json.Marshal(data)
+				if err != nil {
+					panic(err)
+				}
+				msg = []byte(string(send_event_string))
 			}
-			msg = []byte(string(send_event_string))
+
 		}
 		if s.Subs != nil {
 			err := wsutil.WriteServerMessage(*s.Subs.Connection, op, []byte(msg))
@@ -324,7 +334,6 @@ func Emit(event string, room interface{}, op ws.OpCode, data map[string]interfac
 	defer Hub.lock.RUnlock()
 
 	room_in_arr, ok := room.([]string)
-
 	if ok {
 		for _, room := range room_in_arr {
 			go Hub.Subs[room].send_msg_in_room(event, op, data, nil)
