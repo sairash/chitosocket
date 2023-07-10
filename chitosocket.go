@@ -292,7 +292,7 @@ func websocketFD(new_subscriber *Subscriber) int {
 }
 
 // Loop through the linked list of subscribers and send it
-func (s *Subscription) send_msg_in_room(event string, op ws.OpCode, data map[string]interface{}, msg []byte) {
+func (s *Subscription) send_msg_in_room(event string, op ws.OpCode, data any, msg []byte) {
 	if s != nil {
 		Hub.lock.RLock()
 		defer Hub.lock.RUnlock()
@@ -300,7 +300,7 @@ func (s *Subscription) send_msg_in_room(event string, op ws.OpCode, data map[str
 		if msg == nil {
 			msg = []byte{}
 			if event != "" {
-				send_event := socket_message{event, data}
+				send_event := socket_message{event, data.(map[string]interface{})}
 				send_event_string, err := json.Marshal(send_event)
 				if err != nil {
 					panic(err)
@@ -329,7 +329,7 @@ func (s *Subscription) send_msg_in_room(event string, op ws.OpCode, data map[str
 }
 
 // Emit message to a room
-func Emit(event string, room interface{}, op ws.OpCode, data map[string]interface{}) {
+func Emit(event string, room interface{}, op ws.OpCode, data any) {
 	Hub.lock.RLock()
 	defer Hub.lock.RUnlock()
 
