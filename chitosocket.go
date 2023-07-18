@@ -133,10 +133,10 @@ func StartUp() {
 }
 
 // Upgrade http to socket Connection
-func UpgradeConnection(r *http.Request, w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, Subscriber, error) {
+func UpgradeConnection(r *http.Request, w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, *Subscriber, error) {
 	conn, bufioRW, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
-		return nil, nil, Subscriber{}, err
+		return nil, nil, &Subscriber{}, err
 	}
 	id := RandomStringGenerator(15)
 	new_subscriber := Subscriber{
@@ -151,7 +151,7 @@ func UpgradeConnection(r *http.Request, w http.ResponseWriter) (net.Conn, *bufio
 	}
 	new_subscriber.AddToRoom(id)
 
-	return conn, bufioRW, new_subscriber, nil
+	return conn, bufioRW, &new_subscriber, nil
 }
 
 // add new subscriber to hub room
