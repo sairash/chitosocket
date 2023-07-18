@@ -375,6 +375,9 @@ func start() {
 				break
 			}
 			if msg, op, err := wsutil.ReadClientData(*subs.Connection); err != nil {
+				if disconnect_event, ok := On["disconnect"]; ok {
+					disconnect_event(subs, op, map[string]interface{}{})
+				}
 				if err := Epoller.Remove(subs); err != nil {
 					log.Printf("Failed to remove %v", err)
 				}
