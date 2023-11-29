@@ -305,24 +305,23 @@ func (s *Subscription) send_msg_in_room(event string, op ws.OpCode, data any, ms
 				if err != nil {
 					panic(err)
 				}
-				msg = []byte(string(send_event_string))
+				msg = send_event_string
 			} else {
 				send_event_string, err := json.Marshal(data)
 				if err != nil {
 					panic(err)
 				}
-				msg = []byte(string(send_event_string))
+				msg = send_event_string
 			}
-
 		}
 		if s.Subs != nil {
-			err := wsutil.WriteServerMessage(*s.Subs.Connection, op, []byte(msg))
+			err := wsutil.WriteServerMessage(*s.Subs.Connection, op, msg)
 			if err != nil {
 				log.Printf("Failed to send %v", err)
 			}
 
 			if s.Next != nil {
-				s.Next.send_msg_in_room(event, op, nil, []byte(msg))
+				s.Next.send_msg_in_room(event, op, nil, msg)
 			}
 		}
 	}
