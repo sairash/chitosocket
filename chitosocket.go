@@ -27,7 +27,7 @@ var (
 	Hub *HubStruct
 
 	// Heart of Server Listening Function
-	On = map[string]func(subs *Subscriber, op ws.OpCode, data map[string]interface{}){}
+	On = map[string]func(subs **Subscriber, op ws.OpCode, data map[string]interface{}){}
 )
 
 // For Random Number
@@ -241,8 +241,8 @@ func (e *Epoll) Add(new_subscriber *Subscriber) error {
 }
 
 // Remove connection from both hub and epoller
-func (e *Epoll) Remove(sub *Subscriber) error {
-	fd := websocketFD(sub)
+func (e *Epoll) Remove(sub **Subscriber) error {
+	fd := websocketFD(*sub)
 	err := unix.EpollCtl(e.Fd, syscall.EPOLL_CTL_DEL, fd, nil)
 	if err != nil {
 		return err
@@ -252,14 +252,18 @@ func (e *Epoll) Remove(sub *Subscriber) error {
 
 	Hub.lock.Lock()
 	defer Hub.lock.Unlock()
-	for _, room := range sub.Room {
-		Hub.Subs[room] = Hub.Subs[room].remove_next(sub)
+	su := *sub
+
+	for _, room := range su.Room {
+		Hub.Subs[room] = Hub.Subs[room].remove_next(su)
 
 		if Hub.Subs[room] == nil {
 			delete(Hub.Subs, room)
 		}
 	}
-	sub = nil
+	fmt.Println(sub)
+	*sub = nil
+	fmt.Println(*sub)
 	delete(e.Connections, fd)
 
 	return nil
@@ -375,20 +379,24 @@ func start() {
 			}
 			if msg, op, err := wsutil.ReadClientData(*subs.Connection); err != nil {
 				if disconnect_event, ok := On["disconnect"]; ok {
-					disconnect_event(subs, op, map[string]interface{}{})
-				}
-				if err := Epoller.Remove(subs); err != nil {
-					log.Printf("Failed to remove %v", err)
+					disconnect_event(&subs, op, map[string]interface{}{})
 				}
 				con := *subs.Connection
+				if err := Epoller.Remove(&subs); err != nil {
+					log.Printf("Failed to remove %v", err)
+				}
+
 				con.Close()
+
+				fmt.Println(subs)
+
 			} else {
 				event, msg_from_client, err := unmarshal_msg(msg)
 				if err != nil {
 					log.Println(err)
 				}
 				if on_event, ok := On[event]; ok {
-					on_event(subs, op, msg_from_client)
+					on_event(&subs, op, msg_from_client)
 				}
 			}
 		}
