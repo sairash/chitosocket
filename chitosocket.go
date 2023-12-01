@@ -261,9 +261,7 @@ func (e *Epoll) Remove(sub **Subscriber) error {
 			delete(Hub.Subs, room)
 		}
 	}
-	fmt.Println(sub)
 	*sub = nil
-	fmt.Println(*sub)
 	delete(e.Connections, fd)
 
 	return nil
@@ -387,9 +385,6 @@ func start() {
 				}
 
 				con.Close()
-
-				fmt.Println(subs)
-
 			} else {
 				event, msg_from_client, err := unmarshal_msg(msg)
 				if err != nil {
