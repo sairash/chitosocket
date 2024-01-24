@@ -19,7 +19,7 @@ import (
 type Socket struct {
 	Epoller *Epoll
 	Hub     *HubStruct
-	On      map[string]func(subs **Subscriber, op ws.OpCode, data map[string]interface{})
+	On      map[string]func(subs *Subscriber, op ws.OpCode, data map[string]interface{})
 }
 
 // Socket Data structure
@@ -91,6 +91,7 @@ func StartUp() *Socket {
 		log.Printf("Error %e \n", err)
 		os.Exit(1)
 	}
+	socket.On = make(map[string]func(subs *Subscriber, op ws.OpCode, data map[string]interface{}))
 
 	go socket.start()
 	return &socket
@@ -154,12 +155,12 @@ func (socket *Socket) RemoveFromRoom(subs *Subscriber, room string) {
 	room_s.lock.Unlock()
 }
 
-func (socket *Socket) Emit(event string, data any, room ...string) {
+func (socket *Socket) Emit(event string, data map[string]interface{}, room ...string) {
 	if event == "" {
 		log.Printf("Cannot have empty event")
 		return
 	}
-	send_event := socket_message{event, data.(map[string]interface{})}
+	send_event := socket_message{event, data}
 	msg, err := json.Marshal(send_event)
 	if err != nil {
 		panic(err)
@@ -273,7 +274,7 @@ func (socket *Socket) start() {
 			}
 			if msg, op, err := wsutil.ReadClientData(*subs.Connection); err != nil {
 				if disconnect_event, ok := socket.On["disconnect"]; ok {
-					disconnect_event(&subs, op, map[string]interface{}{})
+					disconnect_event(subs, op, map[string]interface{}{})
 				}
 				con := *subs.Connection
 				if err := socket.Remove(&subs); err != nil {
@@ -287,7 +288,7 @@ func (socket *Socket) start() {
 					log.Println(err)
 				}
 				if on_event, ok := socket.On[event]; ok {
-					on_event(&subs, op, msg_from_client)
+					on_event(subs, op, msg_from_client)
 				}
 			}
 		}
