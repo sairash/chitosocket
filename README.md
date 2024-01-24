@@ -1,7 +1,7 @@
 # ChitoSocket
 ## _Less Memory Footprint Socket io_
 
-*⚠️ Only works in linux*
+*⚠️ Still working on it*
 
 Chito → language: Nepali → *छिटो* →  meaning: *Fast* <br/>
 Socket → meaning: *Web Socket*

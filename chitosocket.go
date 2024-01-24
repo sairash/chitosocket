@@ -1,42 +1,26 @@
-package chitosocket
+package main
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"sync"
 	"syscall"
-	"time"
-	"unsafe"
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
-
-	"golang.org/x/sys/unix"
 )
 
-var (
-	// Heart Of Socket
+type Socket struct {
 	Epoller *Epoll
-	// Heart of room
-	Hub *HubStruct
-
-	// Heart of Server Listening Function
-	On = map[string]func(subs **Subscriber, op ws.OpCode, data map[string]interface{}){}
-)
-
-// For Random Number
-const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-const (
-	letterIdxBits = 6
-	letterIdxMask = 1<<letterIdxBits - 1
-	letterIdxMax  = 63 / letterIdxBits
-)
+	Hub     *HubStruct
+	On      map[string]func(subs **Subscriber, op ws.OpCode, data map[string]interface{})
+}
 
 // Socket Data structure
 type socket_message struct {
@@ -44,16 +28,15 @@ type socket_message struct {
 	Data  map[string]interface{} `json:"data"`
 }
 
-// Room Hub Structure
-type HubStruct struct {
-	Subs map[string]*Subscription
+type HubSubStruct struct {
+	Room map[string]*Subscriber
 	lock *sync.RWMutex
 }
 
-// Subscriber Linear Linked Tree
-type Subscription struct {
-	Subs *Subscriber
-	Next *Subscription
+// Room Hub Structure
+type HubStruct struct {
+	Subs map[string]*HubSubStruct
+	lock *sync.RWMutex
 }
 
 // One Conenction has one subscriber
@@ -70,28 +53,8 @@ type Epoll struct {
 	lock        *sync.RWMutex
 }
 
-// Random String Generator for socket id and inital room
-func RandomStringGenerator(n int) string {
-	var src = rand.NewSource(time.Now().UnixNano())
-	b := make([]byte, n)
-	for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
-		if remain == 0 {
-			cache, remain = src.Int63(), letterIdxMax
-		}
-		if idx := int(cache & letterIdxMask); idx < len(letterBytes) {
-			b[i] = letterBytes[idx]
-			i--
-		}
-		cache >>= letterIdxBits
-		remain--
-	}
-
-	return *(*string)(unsafe.Pointer(&b))
-}
-
-// Start a new Epoller
 func MkEpoll() (*Epoll, error) {
-	fd, err := unix.EpollCreate1(0)
+	fd, err := syscall.EpollCreate1(0)
 	if err != nil {
 		return nil, err
 	}
@@ -102,16 +65,15 @@ func MkEpoll() (*Epoll, error) {
 	}, nil
 }
 
-// Make a hub for storing room and connection
 func MKHub() *HubStruct {
 	return &HubStruct{
-		Subs: make(map[string]*Subscription),
+		Subs: make(map[string]*HubSubStruct),
 		lock: &sync.RWMutex{},
 	}
 }
 
-// Start chitosocket server
-func StartUp() {
+func StartUp() *Socket {
+	socket := Socket{}
 	var rLimit syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err != nil {
 		panic(err)
@@ -121,73 +83,148 @@ func StartUp() {
 		panic(err)
 	}
 
-	Hub = MKHub()
+	socket.Hub = MKHub()
 
 	var err error
-	Epoller, err = MkEpoll()
+	socket.Epoller, err = MkEpoll()
 	if err != nil {
-		panic(err)
+		log.Printf("Error %e \n", err)
+		os.Exit(1)
 	}
 
-	go start()
+	go socket.start()
+	return &socket
 }
 
-// Upgrade http to socket Connection
-func UpgradeConnection(r *http.Request, w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, *Subscriber, error) {
+func (socket *Socket) UpgradeConnection(r *http.Request, w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, *Subscriber, error) {
 	conn, bufioRW, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
 		return nil, nil, &Subscriber{}, err
 	}
-	id := RandomStringGenerator(15)
 	new_subscriber := Subscriber{
-		id,
-		&conn,
-		make(map[string]interface{}),
-		[]string{},
+		Connection: &conn,
+		Data:       make(map[string]interface{}),
 	}
-	if err := Epoller.Add(&new_subscriber); err != nil {
+
+	fd := new_subscriber.websocketFD()
+	new_subscriber.Id = fmt.Sprint(fd)
+	if err := socket.Epoller.Add(&new_subscriber, fd); err != nil {
 		log.Printf("Failed to add connection %v", err)
 		conn.Close()
 	}
-	new_subscriber.AddToRoom(id)
+
+	socket.AddToRoom(&new_subscriber, new_subscriber.Id)
 
 	return conn, bufioRW, &new_subscriber, nil
 }
 
-// add new subscriber to hub room
-func (s *Subscription) add_next(new_sub *Subscription) {
-	here := s
-	for here.Next != nil {
-		here = here.Next
+func (socket *Socket) AddToRoom(subs *Subscriber, room string) {
+	if socket.Hub.Subs[room] == nil {
+		socket.Hub.lock.Lock()
+		socket.Hub.Subs[room] = &HubSubStruct{
+			Room: make(map[string]*Subscriber),
+			lock: &sync.RWMutex{},
+		}
+		socket.Hub.lock.Unlock()
 	}
-	here.Next = new_sub
+	room_s := socket.Hub.Subs[room]
+
+	defer room_s.lock.Unlock()
+	subs.Room = append(subs.Room, room)
+	room_s.lock.Lock()
+	room_s.Room[subs.Id] = subs
 }
 
-// Find, delete and return new subscription to remove the left connection from room
-func (s *Subscription) remove_next(subs *Subscriber) *Subscription {
-
-	help_subscription := s
-	if help_subscription.Subs == subs {
-		if help_subscription.Next != nil {
-			help_subscription.Subs = help_subscription.Next.Subs
-			help_subscription.Next = help_subscription.Next.Next
-			return s
-		} else {
-			return nil
-		}
+func (e *Epoll) Add(new_subscriber *Subscriber, fd int) error {
+	err := syscall.EpollCtl(e.Fd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Events: syscall.EPOLLIN | syscall.EPOLLHUP, Fd: int32(fd)})
+	if err != nil {
+		return err
 	}
-
-	for help_subscription.Next != nil {
-		if help_subscription.Next.Subs == subs {
-			help_subscription.Next = help_subscription.Next.Next
-			return s
-		}
-		help_subscription = help_subscription.Next
-	}
-	return s
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	e.Connections[fd] = new_subscriber
+	return nil
 }
 
-// Remove room from array of rooms in subsriber
+func (socket *Socket) RemoveFromRoom(subs *Subscriber, room string) {
+	subs.Room = remove_element_from_array(subs.Room, room)
+	room_s := socket.Hub.Subs[room]
+	socket.Hub.lock.Lock()
+	delete(room_s.Room, subs.Id)
+	room_s.lock.Unlock()
+}
+
+func (socket *Socket) Emit(event string, data any, room ...string) {
+	if event == "" {
+		log.Printf("Cannot have empty event")
+		return
+	}
+	send_event := socket_message{event, data.(map[string]interface{})}
+	msg, err := json.Marshal(send_event)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, room := range room {
+		room_s := socket.Hub.Subs[room]
+		room_s.lock.RLock()
+		for _, subs := range room_s.Room {
+			err = wsutil.WriteServerMessage(*subs.Connection, 1, msg)
+			if err != nil {
+				log.Printf("Failed to send %v", err)
+			}
+		}
+		room_s.lock.RUnlock()
+	}
+}
+
+func (socket *Socket) Wait() ([]*Subscriber, error) {
+	events := make([]syscall.EpollEvent, 100)
+	n, err := syscall.EpollWait(socket.Epoller.Fd, events, 100)
+	if err != nil {
+		return nil, err
+	}
+	socket.Epoller.lock.RLock()
+	defer socket.Epoller.lock.RUnlock()
+	var connections []*Subscriber
+	for i := 0; i < n; i++ {
+		conn := socket.Epoller.Connections[int(events[i].Fd)]
+		connections = append(connections, conn)
+	}
+	return connections, nil
+}
+
+func (socket *Socket) Remove(sub **Subscriber) error {
+	su := *sub
+	fd := su.websocketFD()
+	err := syscall.EpollCtl(socket.Epoller.Fd, syscall.EPOLL_CTL_DEL, fd, nil)
+	if err != nil {
+		return err
+	}
+
+	for _, room := range su.Room {
+		room_s := socket.Hub.Subs[room]
+		if room_s == nil {
+			continue
+		}
+		room_s.lock.Lock()
+		delete(room_s.Room, su.Id)
+		room_s.lock.Unlock()
+
+		if room_s == nil {
+			socket.Hub.lock.Lock()
+			delete(socket.Hub.Subs, room)
+			socket.Hub.lock.Unlock()
+		}
+	}
+	*sub = nil
+	socket.Epoller.lock.Lock()
+	delete(socket.Epoller.Connections, fd)
+	socket.Epoller.lock.Unlock()
+
+	return nil
+}
+
 func remove_element_from_array(strings_in_array []string, string_to_remove string) []string {
 	deleteIndex := -1
 	for i, s := range strings_in_array {
@@ -197,95 +234,13 @@ func remove_element_from_array(strings_in_array []string, string_to_remove strin
 		}
 	}
 	if deleteIndex != -1 {
-		copy(strings_in_array[deleteIndex:], strings_in_array[deleteIndex+1:])
+		strings_in_array[deleteIndex] = strings_in_array[len(strings_in_array)]
 		strings_in_array = strings_in_array[:len(strings_in_array)-1]
 	}
 	return strings_in_array
 }
 
-// Add subscriber to a perticular room
-func (subs *Subscriber) AddToRoom(room string) {
-	Hub.lock.Lock()
-	defer Hub.lock.Unlock()
-	new_subscription := Subscription{subs, nil}
-
-	if Hub.Subs[room] == nil {
-		Hub.Subs[room] = &new_subscription
-	} else {
-		Hub.Subs[room].add_next(&new_subscription)
-	}
-	subs.Room = append(subs.Room, room)
-}
-
-// Remove Subscriber from a perticular room
-func (subs *Subscriber) RemoveFromRoom(room string) {
-	Hub.lock.Lock()
-	defer Hub.lock.Unlock()
-	subs.Room = remove_element_from_array(subs.Room, room)
-	Hub.Subs[room].remove_next(subs)
-}
-
-// Add connection to both hub and epoller
-func (e *Epoll) Add(new_subscriber *Subscriber) error {
-	fd := websocketFD(new_subscriber)
-	err := unix.EpollCtl(e.Fd, syscall.EPOLL_CTL_ADD, fd, &unix.EpollEvent{Events: unix.POLLIN | unix.POLLHUP, Fd: int32(fd)})
-	if err != nil {
-		return err
-	}
-	e.lock.Lock()
-	defer e.lock.Unlock()
-
-	e.Connections[fd] = new_subscriber
-
-	return nil
-}
-
-// Remove connection from both hub and epoller
-func (e *Epoll) Remove(sub **Subscriber) error {
-	fd := websocketFD(*sub)
-	err := unix.EpollCtl(e.Fd, syscall.EPOLL_CTL_DEL, fd, nil)
-	if err != nil {
-		return err
-	}
-	e.lock.Lock()
-	defer e.lock.Unlock()
-
-	Hub.lock.Lock()
-	defer Hub.lock.Unlock()
-	su := *sub
-
-	for _, room := range su.Room {
-		Hub.Subs[room] = Hub.Subs[room].remove_next(su)
-
-		if Hub.Subs[room] == nil {
-			delete(Hub.Subs, room)
-		}
-	}
-	*sub = nil
-	delete(e.Connections, fd)
-
-	return nil
-}
-
-// Wait For the connection to send any request
-func (e *Epoll) Wait() ([]*Subscriber, error) {
-	events := make([]unix.EpollEvent, 100)
-	n, err := unix.EpollWait(e.Fd, events, 100)
-	if err != nil {
-		return nil, err
-	}
-	e.lock.RLock()
-	defer e.lock.RUnlock()
-	var connections []*Subscriber
-	for i := 0; i < n; i++ {
-		conn := e.Connections[int(events[i].Fd)]
-		connections = append(connections, conn)
-	}
-	return connections, nil
-}
-
-// Find the FD of connection
-func websocketFD(new_subscriber *Subscriber) int {
+func (new_subscriber *Subscriber) websocketFD() int {
 	tcpConn := reflect.Indirect(reflect.ValueOf(*new_subscriber.Connection)).FieldByName("conn")
 	fdVal := tcpConn.FieldByName("fd")
 	pfdVal := reflect.Indirect(fdVal).FieldByName("pfd")
@@ -293,65 +248,7 @@ func websocketFD(new_subscriber *Subscriber) int {
 	return int(pfdVal.FieldByName("Sysfd").Int())
 }
 
-// Loop through the linked list of subscribers and send it
-func (s *Subscription) send_msg_in_room(event string, op ws.OpCode, data any, msg []byte) {
-	if s != nil {
-		Hub.lock.RLock()
-		defer Hub.lock.RUnlock()
-
-		if msg == nil {
-			msg = []byte{}
-			if event != "" {
-				send_event := socket_message{event, data.(map[string]interface{})}
-				send_event_string, err := json.Marshal(send_event)
-				if err != nil {
-					panic(err)
-				}
-				msg = send_event_string
-			} else {
-				send_event_string, err := json.Marshal(data)
-				if err != nil {
-					panic(err)
-				}
-				msg = send_event_string
-			}
-		}
-		if s.Subs != nil {
-			err := wsutil.WriteServerMessage(*s.Subs.Connection, op, msg)
-			if err != nil {
-				log.Printf("Failed to send %v", err)
-			}
-
-			if s.Next != nil {
-				s.Next.send_msg_in_room(event, op, nil, msg)
-			}
-		}
-	}
-}
-
-// Emit message to a room
-func Emit(event string, room interface{}, op ws.OpCode, data any) {
-	Hub.lock.RLock()
-	defer Hub.lock.RUnlock()
-
-	room_in_arr, ok := room.([]string)
-	if ok {
-		for _, room := range room_in_arr {
-			go Hub.Subs[room].send_msg_in_room(event, op, data, nil)
-		}
-	} else {
-		room_in_string, ok := room.(string)
-		if ok {
-			go Hub.Subs[room_in_string].send_msg_in_room(event, op, data, nil)
-		}
-	}
-}
-
-// Converting messages sent by client to interface
 func unmarshal_msg(msg []byte) (string, map[string]interface{}, error) {
-	Hub.lock.RLock()
-	defer Hub.lock.RUnlock()
-
 	msg_un_mar := socket_message{
 		Event: "",
 		Data:  make(map[string]interface{}),
@@ -363,10 +260,9 @@ func unmarshal_msg(msg []byte) (string, map[string]interface{}, error) {
 	return msg_un_mar.Event, msg_un_mar.Data, nil
 }
 
-// For Getting And looping through all the connection to get Subscriber Message
-func start() {
+func (socket *Socket) start() {
 	for {
-		subscriber, err := Epoller.Wait()
+		subscriber, err := socket.Wait()
 		if err != nil {
 			// log.Printf("Failed to epoll wait %v", err)
 			continue
@@ -376,11 +272,11 @@ func start() {
 				break
 			}
 			if msg, op, err := wsutil.ReadClientData(*subs.Connection); err != nil {
-				if disconnect_event, ok := On["disconnect"]; ok {
+				if disconnect_event, ok := socket.On["disconnect"]; ok {
 					disconnect_event(&subs, op, map[string]interface{}{})
 				}
 				con := *subs.Connection
-				if err := Epoller.Remove(&subs); err != nil {
+				if err := socket.Remove(&subs); err != nil {
 					log.Printf("Failed to remove %v", err)
 				}
 
@@ -390,7 +286,7 @@ func start() {
 				if err != nil {
 					log.Println(err)
 				}
-				if on_event, ok := On[event]; ok {
+				if on_event, ok := socket.On[event]; ok {
 					on_event(&subs, op, msg_from_client)
 				}
 			}
