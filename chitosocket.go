@@ -50,6 +50,10 @@ func StartUpWithConfig(config Config) (*Socket, error) {
 		workerCount: config.NumWorkers,
 	}
 
+	socket.On["ping"] = func(sub *Subscriber, data []byte) {
+		socket.EmitDirect(sub, "pong", data)
+	}
+
 	socket.startWorkers()
 	go socket.epollLoop()
 
@@ -377,7 +381,7 @@ func (socket *Socket) Remove(sub *Subscriber) error {
 }
 
 // sends a message to all subscribers in the specified rooms
-func (socket *Socket) Emit(event string, data []byte, rooms ...string) {
+func (socket *Socket) Emit(event string, excludeSub *Subscriber, data []byte, rooms ...string) {
 	if event == "" {
 		return
 	}
@@ -390,12 +394,12 @@ func (socket *Socket) Emit(event string, data []byte, rooms ...string) {
 	putByteBuffer(buf)
 
 	for _, room := range rooms {
-		socket.emitToRoom(room, payload)
+		socket.emitToRoom(room, excludeSub, payload)
 	}
 }
 
 // sends a message to all subscribers in a room
-func (socket *Socket) emitToRoom(room string, payload []byte) {
+func (socket *Socket) emitToRoom(room string, excludeSub *Subscriber, payload []byte) {
 	hub := socket.hub.getShard(room)
 
 	hub.lock.RLock()
@@ -414,6 +418,9 @@ func (socket *Socket) emitToRoom(room string, payload []byte) {
 	r.lock.RUnlock()
 
 	for _, sub := range *subscribers {
+		if sub != nil && sub == excludeSub {
+			continue
+		}
 		sub.Send(payload)
 	}
 	putSubscriberSlice(subscribers)

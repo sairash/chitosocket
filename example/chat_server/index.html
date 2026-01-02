@@ -389,6 +389,8 @@
         </main>
     </div>
 
+    <script src="/chitosocket.js"></script>
+
     <script>
         let ws = null;
         let userId = null;
@@ -396,59 +398,50 @@
         let currentRoom = null;
         let messagesByRoom = {};
 
-        function connect() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+        const chitosocket = new ChitoSocket('localhost:8080');
 
-            ws.onopen = () => {
-                document.getElementById('statusDot').classList.add('connected');
-                document.getElementById('statusText').textContent = 'Connected';
-            };
+        chitosocket.on('welcome', (data) => {
+            userId = data.id;
+            document.getElementById('userId').textContent = userId;
+        });
 
-            ws.onclose = () => {
-                document.getElementById('statusDot').classList.remove('connected');
-                document.getElementById('statusText').textContent = 'Disconnected';
-                setTimeout(connect, 2000);
-            };
+        chitosocket.onConnect(() => {
+            document.getElementById('statusDot').classList.add('connected');
+            document.getElementById('statusText').textContent = 'Connected';
+        });
+        chitosocket.onDisconnect(() => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Disconnected';
+        });
+        chitosocket.onError((error) => {
+            console.error('WebSocket error:', error);
+        });
 
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                handleMessage(msg);
-            };
-        }
-
-        function handleMessage(msg) {
-            switch (msg.event) {
-                case 'welcome':
-                    userId = msg.data.id;
-                    document.getElementById('userId').textContent = userId;
-                    break;
-
-                case 'chat':
-                    const data = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
-                    addMessage(data.room, data.sender, data.text, data.sender === userId);
-                    break;
-
-                case 'user_joined':
-                    const joinedRoom = msg.data.room;
-                    const joinedUser = msg.data.user;
-                    if (joinedUser !== userId) {
-                        addSystemMessage(joinedRoom, `${joinedUser.slice(0, 8)}... joined the room`);
-                    }
-                    break;
-
-                case 'user_left':
-                    const leftRoom = msg.data.room;
-                    const leftUser = msg.data.user;
-                    addSystemMessage(leftRoom, `${leftUser.slice(0, 8)}... left the room`);
-                    break;
+        chitosocket.on('pong', () => {
+            console.log("Pong");
+        });
+        chitosocket.on('chat', (data) => {
+            const gotData = typeof data === 'string' ? JSON.parse(data) : data;
+            console.log('chat', gotData);
+            addMessage(gotData.room, gotData.sender, gotData.text, gotData.sender === userId);
+        });
+        chitosocket.on('user_joined', (data) => {
+            const joinedRoom = data.room;
+            const joinedUser = data.user;
+            if (joinedUser !== userId) {
+                addSystemMessage(joinedRoom, `${joinedUser.slice(0, 8)}... joined the room`);
             }
-        }
+        });
+        chitosocket.on('user_left', (data) => {
+            const leftRoom = data.room;
+            const leftUser = data.user;
+            addSystemMessage(leftRoom, `${leftUser.slice(0, 8)}... left the room`);
+        });
+        chitosocket.connect();
+
 
         function send(event, data) {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ event, data }));
-            }
+            chitosocket.send(event, data);
         }
 
         function joinRoom() {
@@ -456,7 +449,7 @@
             const roomName = input.value.trim();
             if (!roomName || rooms.has(roomName)) return;
 
-            send('join', { room: roomName });
+            chitosocket.send('join', { room: roomName });
             rooms.add(roomName);
             messagesByRoom[roomName] = [];
             input.value = '';
@@ -464,9 +457,13 @@
             selectRoom(roomName);
         }
 
+        function ping(){
+            chitosocket.send('ping', {});
+        }
+
         function leaveRoom(roomName, e) {
             if (e) e.stopPropagation();
-            send('leave', { room: roomName });
+            chitosocket.send('leave', { room: roomName });
             rooms.delete(roomName);
             delete messagesByRoom[roomName];
             
@@ -548,7 +545,7 @@
             const text = input.value.trim();
             if (!text || !currentRoom) return;
 
-            send('chat', { room: currentRoom, text: text });
+            chitosocket.send('chat', { room: currentRoom, text: text });
             addMessage(currentRoom, userId, text, true);
             input.value = '';
         }
@@ -563,7 +560,6 @@
             return div.innerHTML;
         }
 
-        connect();
     </script>
 </body>
 </html>

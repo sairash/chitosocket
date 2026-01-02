@@ -42,7 +42,7 @@ func main() {
 			"user": sub.ID,
 		}
 		notifyData, _ := json.Marshal(notification)
-		socket.Emit("user_joined", notifyData, req.Room)
+		socket.Emit("user_joined", sub, notifyData, req.Room)
 	}
 
 	socket.On["leave"] = func(sub *chitosocket.Subscriber, data []byte) {
@@ -58,7 +58,7 @@ func main() {
 			"user": sub.ID,
 		}
 		notifyData, _ := json.Marshal(notification)
-		socket.Emit("user_left", notifyData, req.Room)
+		socket.Emit("user_left", sub, notifyData, req.Room)
 
 		socket.RemoveFromRoom(sub, req.Room)
 	}
@@ -68,23 +68,22 @@ func main() {
 			Room string `json:"room"`
 			Text string `json:"text"`
 		}
+		fmt.Println("chat", chatMsg.Room, chatMsg.Text)
 		if err := json.Unmarshal(data, &chatMsg); err != nil {
+			fmt.Println("chat error", err)
 			return
 		}
+		fmt.Println("chat", chatMsg.Room, chatMsg.Text)
 
 		response := map[string]string{
 			"room":   chatMsg.Room,
 			"sender": sub.ID,
 			"text":   chatMsg.Text,
 		}
-		responseData, _ := json.Marshal(response)
 
-		members := socket.GetRoomMembers(chatMsg.Room)
-		for _, member := range members {
-			if member.ID != sub.ID {
-				socket.EmitDirect(member, "chat", responseData)
-			}
-		}
+		responseData, _ := json.Marshal(response)
+		fmt.Println("response", chatMsg.Room, string(responseData))
+		socket.Emit("chat", sub, responseData, chatMsg.Room)
 	}
 
 	socket.On["broadcast"] = func(sub *chitosocket.Subscriber, data []byte) {
@@ -95,9 +94,6 @@ func main() {
 		socket.EmitDirect(sub, "echo", data)
 	}
 
-	socket.On["ping"] = func(sub *chitosocket.Subscriber, data []byte) {
-		socket.EmitDirect(sub, "pong", data)
-	}
 	socket.On["disconnect"] = func(sub *chitosocket.Subscriber, data []byte) {}
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +107,11 @@ func main() {
 	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "index.html")
+		http.ServeFile(w, r, "example/chat_server/index.html")
+	})
+
+	http.HandleFunc("/chitosocket.js", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "example/chat_server/chitosocket.js")
 	})
 
 	fmt.Fprintf(os.Stderr, "ChitoSocket server starting on :8080\n")
