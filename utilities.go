@@ -2,10 +2,10 @@ package chitosocket
 
 import (
 	"net"
-	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"unsafe"
 )
 
@@ -137,11 +137,21 @@ func fnvHash32(s string) uint32 {
 	return h
 }
 
+// getFD extracts file descriptor from connection using syscall (no reflection)
 func getFD(conn net.Conn) int {
-	tcpConn := reflect.Indirect(reflect.ValueOf(conn)).FieldByName("conn")
-	fdVal := tcpConn.FieldByName("fd")
-	pfdVal := reflect.Indirect(fdVal).FieldByName("pfd")
-	return int(pfdVal.FieldByName("Sysfd").Int())
+	sc, ok := conn.(syscall.Conn)
+	if !ok {
+		return -1
+	}
+	rc, err := sc.SyscallConn()
+	if err != nil {
+		return -1
+	}
+	var fd int = -1
+	rc.Control(func(sysfd uintptr) {
+		fd = int(sysfd)
+	})
+	return fd
 }
 
 // marshalMessageFast marshals a message with minimal allocations
