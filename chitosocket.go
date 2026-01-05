@@ -95,41 +95,30 @@ func (socket *Socket) worker() {
 
 // processes a single event
 func (socket *Socket) handleEvent(event *workerEvent) {
+	defer PutMessage(event.message)
+
 	if event.subscriber == nil {
-		if event.message != nil {
-			PutMessage(event.message)
-		}
 		return
 	}
 
 	if event.generation != event.subscriber.generation {
-		if event.message != nil {
-			PutMessage(event.message)
-		}
 		return
 	}
 
 	switch event.eventType {
 	case eventMessage:
 		if event.subscriber.closed.Load() {
-			if event.message != nil {
-				PutMessage(event.message)
-			}
 			return
 		}
 		if event.message != nil {
 			if handler, ok := socket.On[event.message.Event]; ok {
 				handler(event.subscriber, event.message.Data)
 			}
-			PutMessage(event.message)
 		}
 
 	case eventDisconnect:
 		if handler, ok := socket.On["disconnect"]; ok {
 			handler(event.subscriber, nil)
-		}
-		if event.message != nil {
-			PutMessage(event.message)
 		}
 		socket.cleanupSubscriber(event.subscriber)
 	}
@@ -182,12 +171,7 @@ func (socket *Socket) dispatchMessage(sub *Subscriber, msg *SubscriberMessage) {
 	event.eventType = eventMessage
 	event.generation = sub.generation
 
-	select {
-	case socket.eventChan <- event:
-	default:
-		socket.handleEvent(event)
-		putWorkerEvent(event)
-	}
+	socket.eventChan <- event
 }
 
 // sends a disconnect event to the worker pool
@@ -201,12 +185,7 @@ func (socket *Socket) dispatchDisconnect(sub *Subscriber) {
 	event.eventType = eventDisconnect
 	event.generation = sub.generation
 
-	select {
-	case socket.eventChan <- event:
-	default:
-		socket.handleEvent(event)
-		putWorkerEvent(event)
-	}
+	socket.eventChan <- event
 }
 
 // parses JSON message using gjson for speed
@@ -287,21 +266,12 @@ func (socket *Socket) startWriteLoop(sub *Subscriber) {
 func (socket *Socket) AddToRoom(sub *Subscriber, room string) {
 	hub := socket.hub.getShard(room)
 
-	hub.lock.Lock()
-	r, exists := hub.rooms[room]
-	if !exists {
-		r = NewRoom()
-		hub.rooms[room] = r
-	}
-	hub.lock.Unlock()
-
+	r := hub.loadOrStore(room)
 	r.lock.Lock()
 	r.members[sub.fd] = sub
 	r.lock.Unlock()
 
-	sub.roomsMu.Lock()
-	sub.Rooms[room] = struct{}{}
-	sub.roomsMu.Unlock()
+	sub.Rooms.Store(room, struct{}{})
 }
 
 // removes a subscriber from a room
@@ -321,9 +291,7 @@ func (socket *Socket) RemoveFromRoom(sub *Subscriber, room string) {
 	isEmpty := len(r.members) == 0
 	r.lock.Unlock()
 
-	sub.roomsMu.Lock()
-	delete(sub.Rooms, room)
-	sub.roomsMu.Unlock()
+	sub.Rooms.Delete(room)
 
 	if isEmpty {
 		hub.lock.Lock()
@@ -360,11 +328,10 @@ func (socket *Socket) cleanupSubscriber(sub *Subscriber) {
 	}
 
 	roomsSlice := getStringSlice()
-	sub.roomsMu.RLock()
-	for room := range sub.Rooms {
-		*roomsSlice = append(*roomsSlice, room)
-	}
-	sub.roomsMu.RUnlock()
+	sub.Rooms.Range(func(key, value interface{}) bool {
+		*roomsSlice = append(*roomsSlice, key.(string))
+		return true
+	})
 
 	for _, room := range *roomsSlice {
 		socket.RemoveFromRoom(sub, room)
@@ -399,6 +366,7 @@ func (socket *Socket) Emit(event string, excludeSub *Subscriber, data []byte, ro
 }
 
 // sends a message to all subscribers in a room
+// if excludeSub is not nil, the message will not be sent to the subscriber
 func (socket *Socket) emitToRoom(room string, excludeSub *Subscriber, payload []byte) {
 	hub := socket.hub.getShard(room)
 

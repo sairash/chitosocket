@@ -107,7 +107,9 @@ socket.On["disconnect"]  // Called when client disconnects
 socket.EmitDirect(sub, "event", data)
 
 // Send to all subscribers in room(s)
-socket.Emit("event", data, "room1", "room2")
+// if excludeSub is not nil, the message will not be sent to the subscriber
+socket.Emit("event", nil, data, "room1", "room2")
+
 
 // Broadcast to all connected clients
 socket.Broadcast("event", data)

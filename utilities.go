@@ -3,6 +3,7 @@ package chitosocket
 import (
 	"net"
 	"reflect"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -22,6 +23,9 @@ func GetMessage() *SubscriberMessage {
 
 // PutMessage returns a message to the pool after resetting it
 func PutMessage(msg *SubscriberMessage) {
+	if msg == nil {
+		return
+	}
 	msg.Event = ""
 	msg.Data = nil
 	messagePool.Put(msg)
@@ -143,9 +147,9 @@ func getFD(conn net.Conn) int {
 // marshalMessageFast marshals a message with minimal allocations
 // Format: {"event":"<event>","data":<data>}
 func marshalMessageFast(buf *[]byte, event string, data []byte) {
-	*buf = append(*buf, `{"event":"`...)
-	*buf = append(*buf, event...)
-	*buf = append(*buf, `","data":`...)
+	*buf = append(*buf, `{"event":`...)
+	*buf = strconv.AppendQuote(*buf, event)
+	*buf = append(*buf, `,"data":`...)
 	if len(data) > 0 {
 		*buf = append(*buf, data...)
 	} else {
@@ -163,4 +167,3 @@ func unsafeStringToBytes(s string) []byte {
 func unsafeBytesToString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
-

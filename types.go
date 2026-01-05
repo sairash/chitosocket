@@ -45,8 +45,7 @@ type Subscriber struct {
 	ID       string
 	Outbound chan []byte
 	Metadata sync.Map
-	Rooms    map[string]struct{} // O(1) room membership lookup
-	roomsMu  sync.RWMutex        // Protects Rooms map
+	Rooms    sync.Map // O(1) room membership lookup
 
 	fd           int
 	conn         net.Conn
@@ -64,7 +63,7 @@ var globalGeneration atomic.Uint64
 var subscriberPool = sync.Pool{
 	New: func() interface{} {
 		return &Subscriber{
-			Rooms:     make(map[string]struct{}, 4),
+			Rooms:     sync.Map{},
 			closeChan: make(chan struct{}),
 		}
 	},
@@ -82,10 +81,6 @@ func NewSubscriber(id string, conn net.Conn, fd int) *Subscriber {
 	sub.generation = globalGeneration.Add(1)
 	sub.writeStarted.Store(false)
 	sub.closed.Store(false)
-	// Reuse existing Rooms map, just clear it
-	for k := range sub.Rooms {
-		delete(sub.Rooms, k)
-	}
 	return sub
 }
 
@@ -96,6 +91,10 @@ func recycleSubscriber(sub *Subscriber) {
 	sub.fd = 0
 	sub.Outbound = nil
 	sub.Metadata = sync.Map{}
+	sub.Rooms.Range(func(key, _ interface{}) bool {
+		sub.Rooms.Delete(key)
+		return true
+	})
 	subscriberPool.Put(sub)
 }
 
@@ -158,6 +157,32 @@ type Hub struct {
 	lock  sync.RWMutex // Properly initialized mutex
 }
 
+// loadOrStore loads a room from the hub if it exists, otherwise creates a new room
+func (h *Hub) loadOrStore(room string) *Room {
+	h.lock.RLock()
+	r, exists := h.rooms[room]
+	h.lock.RUnlock()
+
+	if exists {
+		return r
+	}
+
+	// Create room outside the lock
+	newR := NewRoom()
+
+	h.lock.Lock()
+	// Check again after acquiring write lock
+	if r, exists = h.rooms[room]; exists {
+		h.lock.Unlock()
+		return r
+	}
+
+	h.rooms[room] = newR
+	h.lock.Unlock()
+
+	return newR
+}
+
 // HubShards distributes rooms across multiple shards to reduce contention
 type HubShards struct {
 	hubs  []Hub
@@ -184,4 +209,3 @@ func DefaultConfig(numCPU int) Config {
 		EventChanSize: 8192,
 	}
 }
-
