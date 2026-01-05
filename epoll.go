@@ -74,8 +74,9 @@ func (e *Epoll) Get(fd int) (*Subscriber, bool) {
 	return val.(*Subscriber), true
 }
 
-// waits for epoll events and returns ready subscribers
-func (e *Epoll) Wait() ([]*Subscriber, error) {
+// waits for epoll events and returns ready subscribers (pooled slice)
+// Caller must call putSubscriberSlice when done with the returned slice
+func (e *Epoll) Wait() (*[]*Subscriber, error) {
 	events := getEpollEvents()
 	defer putEpollEvents(events)
 
@@ -92,11 +93,11 @@ func (e *Epoll) Wait() ([]*Subscriber, error) {
 		return nil, nil
 	}
 
-	subscribers := make([]*Subscriber, 0, n)
+	subscribers := getSubscriberSlice()
 	for i := 0; i < n; i++ {
 		fd := int((*events)[i].Fd)
 		if sub, ok := e.Get(fd); ok {
-			subscribers = append(subscribers, sub)
+			*subscribers = append(*subscribers, sub)
 		}
 	}
 	return subscribers, nil
@@ -106,4 +107,3 @@ func (e *Epoll) Wait() ([]*Subscriber, error) {
 func (e *Epoll) Close() error {
 	return syscall.Close(e.fd)
 }
-

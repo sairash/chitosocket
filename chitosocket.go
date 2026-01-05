@@ -131,8 +131,11 @@ func (socket *Socket) epollLoop() {
 		if err != nil {
 			continue
 		}
+		if subscribers == nil {
+			continue
+		}
 
-		for _, sub := range subscribers {
+		for _, sub := range *subscribers {
 			if sub == nil || sub.closed.Load() {
 				continue
 			}
@@ -155,6 +158,7 @@ func (socket *Socket) epollLoop() {
 
 			socket.dispatchMessage(sub, parsedMsg)
 		}
+		putSubscriberSlice(subscribers)
 	}
 }
 
@@ -190,9 +194,9 @@ func (socket *Socket) dispatchDisconnect(sub *Subscriber) {
 
 // parses JSON message using gjson for speed
 func parseMessage(input []byte) (*SubscriberMessage, error) {
-	result := gjson.ParseBytes(input)
+	results := gjson.GetManyBytes(input, "event", "data") // single-pass parsing
 
-	eventResult := result.Get("event")
+	eventResult := results[0]
 	if !eventResult.Exists() || eventResult.String() == "" {
 		return nil, fmt.Errorf("no event found")
 	}
@@ -200,7 +204,7 @@ func parseMessage(input []byte) (*SubscriberMessage, error) {
 	msg := GetMessage()
 	msg.Event = eventResult.String()
 
-	dataResult := result.Get("data")
+	dataResult := results[1]
 	if dataResult.Exists() {
 		msg.Data = unsafeStringToBytes(dataResult.Raw)
 	} else {
