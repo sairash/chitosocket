@@ -91,10 +91,7 @@ func recycleSubscriber(sub *Subscriber) {
 	sub.fd = 0
 	sub.Outbound = nil
 	sub.Metadata = sync.Map{}
-	sub.Rooms.Range(func(key, _ interface{}) bool {
-		sub.Rooms.Delete(key)
-		return true
-	})
+	sub.Rooms = sync.Map{}
 	subscriberPool.Put(sub)
 }
 
