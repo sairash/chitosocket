@@ -1,8 +1,6 @@
 package chitosocket
 
 import (
-	"net"
-
 	"github.com/godzie44/go-uring/reactor"
 
 	"github.com/godzie44/go-uring/uring"
@@ -40,13 +38,6 @@ type Hub *xsync.Map[string, *Room]
 
 // fd is going to be the key
 type Room *xsync.Map[uint, *Subscriber]
-
-type Subscriber struct {
-	fd    int
-	id    string
-	conn  net.Conn
-	rooms []string
-}
 
 type Config struct {
 	NumCPU     int

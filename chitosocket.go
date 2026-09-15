@@ -1,7 +1,7 @@
 package chitosocket
 
 import (
-	"fmt"
+	"context"
 	"net"
 	"net/http"
 	"runtime"
@@ -38,6 +38,10 @@ func NewWithConfig(config Config) (*ChitoSocket, error) {
 		return nil, err
 	}
 
+	go func() {
+		netReactor.Run(context.Background())
+	}()
+
 	cs := newChitoSocket(config.MaxShards, closeRings, netReactor)
 	return cs, nil
 }
@@ -52,7 +56,16 @@ func (cs *ChitoSocket) UpgradeHTTP(r *http.Request, w http.ResponseWriter) error
 	if err != nil {
 		return err
 	}
-	fmt.Println(newConnFD)
+
+	s := Subscriber{
+		fd:      newConnFD,
+		buff:    make([]byte, 1024),
+		reactor: cs.Reactor,
+	}
+
+	s.isClosed.Store(false)
+	s.Capture()
+
 	return nil
 }
 
