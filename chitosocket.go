@@ -1,3 +1,4 @@
+// Package chitosocket is the best socket server
 package chitosocket
 
 import (
@@ -47,7 +48,7 @@ func NewWithConfig(config Config) (*ChitoSocket, error) {
 }
 
 func (cs *ChitoSocket) UpgradeHTTP(r *http.Request, w http.ResponseWriter) error {
-	conn, _, _, err := ws.UpgradeHTTP(r, w)
+	conn, rw, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
 		return err
 	}
@@ -57,9 +58,16 @@ func (cs *ChitoSocket) UpgradeHTTP(r *http.Request, w http.ResponseWriter) error
 		return err
 	}
 
+	n := rw.Reader.Buffered()
+
+	cache, err := rw.Peek(n)
+	if err != nil {
+		return err
+	}
+
 	s := Subscriber{
 		fd:      newConnFD,
-		buff:    make([]byte, 1024),
+		buffer:  newBuffer(1024, cache),
 		reactor: cs.Reactor,
 	}
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/gobwas/ws"
 	"github.com/godzie44/go-uring/reactor"
 	"github.com/godzie44/go-uring/uring"
 	"golang.org/x/sys/unix"
@@ -16,15 +17,14 @@ type Subscriber struct {
 
 	reactor *reactor.NetworkReactor
 
-	// need better buffer implementation
-	buff []byte
-	used uint64
+	buffer *buffer
 
 	isClosed atomic.Bool
 }
 
 func (s *Subscriber) Capture() {
-	op := uring.Recv(uintptr(s.fd), s.buff[s.used:], 0)
+	s.buffer.AlwaysEnoughSpace()
+	op := uring.Recv(uintptr(s.fd), s.buffer.buf[s.buffer.used:], 0)
 
 	s.reactor.Queue(op, func(event uring.CQEvent) {
 		fmt.Println("reactor getting data")
@@ -38,16 +38,33 @@ func (s *Subscriber) Capture() {
 			s.isClosed.Store(true)
 			return
 		}
-		go s.Capture()
 
-		s.used += uint64(event.Res)
+		s.buffer.used += uint64(event.Res)
 
 		s.PrintCurrentBuffer()
+		go s.Capture()
 	})
 }
 
 func (s *Subscriber) PrintCurrentBuffer() {
-	buff := s.buff[:s.used]
+	s.buffer.read = 0
 
-	fmt.Println(buff)
+	f, err := ws.ReadFrame(s.buffer)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println("fin: ", f.Header.Fin, f.Header.OpCode, f.Header.Rsv, f.Header.Length)
+
+	s.buffer.Shrink(int(f.Header.Length)+ws.HeaderSize(f.Header), 1024)
+	// fmt.Printf("%v", f)
+}
+
+func (s *Subscriber) Close() error {
+	s.isClosed.Store(true)
+	err := unix.Close(s.fd)
+	if err != nil {
+		return err
+	}
+	return nil
 }
