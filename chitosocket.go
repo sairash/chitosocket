@@ -11,6 +11,7 @@ import (
 	"github.com/gobwas/ws"
 	"github.com/godzie44/go-uring/reactor"
 	"github.com/godzie44/go-uring/uring"
+	"github.com/sairash/chitosocket/buffer"
 	"golang.org/x/sys/unix"
 )
 
@@ -67,7 +68,7 @@ func (cs *ChitoSocket) UpgradeHTTP(r *http.Request, w http.ResponseWriter) error
 
 	s := Subscriber{
 		fd:      newConnFD,
-		buffer:  newBuffer(1024, cache),
+		buffer:  buffer.NewBuffer(cache),
 		reactor: cs.Reactor,
 	}
 

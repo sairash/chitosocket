@@ -7,6 +7,7 @@ import (
 	"github.com/gobwas/ws"
 	"github.com/godzie44/go-uring/reactor"
 	"github.com/godzie44/go-uring/uring"
+	"github.com/sairash/chitosocket/buffer"
 	"golang.org/x/sys/unix"
 )
 
@@ -17,14 +18,14 @@ type Subscriber struct {
 
 	reactor *reactor.NetworkReactor
 
-	buffer *buffer
+	buffer *buffer.Buffer
 
 	isClosed atomic.Bool
 }
 
 func (s *Subscriber) Capture() {
 	s.buffer.AlwaysEnoughSpace()
-	op := uring.Recv(uintptr(s.fd), s.buffer.buf[s.buffer.used:], 0)
+	op := uring.Recv(uintptr(s.fd), s.buffer.Buf[s.buffer.W:], 0)
 
 	s.reactor.Queue(op, func(event uring.CQEvent) {
 		fmt.Println("reactor getting data")
@@ -39,7 +40,7 @@ func (s *Subscriber) Capture() {
 			return
 		}
 
-		s.buffer.used += uint64(event.Res)
+		s.buffer.W += int(event.Res)
 
 		s.PrintCurrentBuffer()
 		go s.Capture()
@@ -47,16 +48,17 @@ func (s *Subscriber) Capture() {
 }
 
 func (s *Subscriber) PrintCurrentBuffer() {
-	s.buffer.read = 0
+	readCheckpoint := s.buffer.R
 
 	f, err := ws.ReadFrame(s.buffer)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println(err, f.Header)
+		s.buffer.R = readCheckpoint
 		return
 	}
 	fmt.Println("fin: ", f.Header.Fin, f.Header.OpCode, f.Header.Rsv, f.Header.Length)
 
-	s.buffer.Shrink(int(f.Header.Length)+ws.HeaderSize(f.Header), 1024)
+	s.buffer.R = int(f.Header.Length) + ws.HeaderSize(f.Header)
 	// fmt.Printf("%v", f)
 }
 

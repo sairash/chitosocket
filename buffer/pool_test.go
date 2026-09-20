@@ -55,3 +55,28 @@ func TestAntiLog(t *testing.T) {
 		}
 	}
 }
+
+func TestGetAndPut(t *testing.T) {
+	bufferPool := new(pool)
+
+	getPutTest := []struct {
+		input int
+	}{
+		{1024},
+		{8848},
+		{1000},
+	}
+
+	for _, v := range getPutTest {
+		bufferPool.Put(make([]byte, v.input))
+	}
+
+	for _, v := range getPutTest {
+		b := bufferPool.Get(v.input)
+		lenB := len(b)
+
+		if v.input != lenB {
+			t.Errorf("expected byte len as %d got %d", v.input, lenB)
+		}
+	}
+}
