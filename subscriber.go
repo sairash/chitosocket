@@ -24,11 +24,10 @@ type Subscriber struct {
 }
 
 func (s *Subscriber) Capture() {
-	s.buffer.AlwaysEnoughSpace()
+	s.buffer.AlwaysAvailableForWrite()
 	op := uring.Recv(uintptr(s.fd), s.buffer.Buf[s.buffer.W:], 0)
 
 	s.reactor.Queue(op, func(event uring.CQEvent) {
-		fmt.Println("reactor getting data")
 		if s.isClosed.Load() {
 			return
 		}
@@ -50,16 +49,28 @@ func (s *Subscriber) Capture() {
 func (s *Subscriber) PrintCurrentBuffer() {
 	readCheckpoint := s.buffer.R
 
+	h, err := ws.ReadHeader(s.buffer)
+	s.buffer.R = readCheckpoint
+	if err != nil {
+		fmt.Println("header: ", err, h)
+		return
+	}
+
+	required := int(h.Length) + ws.HeaderSize(h)
+	s.buffer.ReadyWrite(required)
+
+	if s.buffer.Len() < required {
+		return
+	}
+
 	f, err := ws.ReadFrame(s.buffer)
 	if err != nil {
-		fmt.Println(err, f.Header)
-		s.buffer.R = readCheckpoint
+		fmt.Println("frame:", err, f.Header)
 		return
 	}
 	fmt.Println("fin: ", f.Header.Fin, f.Header.OpCode, f.Header.Rsv, f.Header.Length)
 
-	s.buffer.R = int(f.Header.Length) + ws.HeaderSize(f.Header)
-	// fmt.Printf("%v", f)
+	s.buffer.R = required
 }
 
 func (s *Subscriber) Close() error {

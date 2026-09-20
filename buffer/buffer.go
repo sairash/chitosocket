@@ -24,7 +24,7 @@ func NewBuffer(b []byte) *Buffer {
 	if len(b) > 0 {
 		buf.Buf = buf.getBuf(len(b))
 		copy(buf.Buf, b)
-
+		buf.W = len(b)
 		return buf
 	}
 
@@ -53,7 +53,7 @@ func (b *Buffer) Grow(n int) {
 		newByte := b.getBuf(leastNeededCap)
 		copy(newByte, b.Buf[b.R:])
 
-		b.putBufferPool(b.Buf)
+		b.putBufferPool()
 
 		b.Buf = newByte
 	}
@@ -70,9 +70,9 @@ func (b *Buffer) getBuf(n int) []byte {
 	return Bufferpool.Get(n)
 }
 
-func (b *Buffer) putBufferPool(Buf []byte) {
-	if cap(Buf) > smallByte {
-		Bufferpool.Put(Buf)
+func (b *Buffer) putBufferPool() {
+	if cap(b.Buf) > smallByte {
+		Bufferpool.Put(b.Buf)
 	}
 	b.Buf = nil
 }
@@ -90,6 +90,30 @@ func (b *Buffer) Read(buf []byte) (int, error) {
 	return n, nil
 }
 
-func (b *Buffer) AlwaysEnoughSpace() {
-	b.Grow(smallByte)
+func (b *Buffer) Len() int {
+	return b.W - b.R
+}
+
+func (b *Buffer) ReadyWrite(n int) {
+	if cap(b.Buf)-b.W >= n {
+		b.Buf = b.Buf[:b.W+n]
+		return
+	}
+
+	unread := b.W - b.R
+
+	nextBuf := b.getBuf(unread + n)
+	copy(nextBuf, b.Buf[b.R:b.W])
+
+	b.putBufferPool()
+
+	b.Buf = nextBuf
+	b.R = 0
+	b.W = unread
+}
+
+func (b *Buffer) AlwaysAvailableForWrite() {
+	if cap(b.Buf)-b.W < smallByte {
+		b.ReadyWrite(smallByte)
+	}
 }
