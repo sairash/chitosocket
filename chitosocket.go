@@ -3,6 +3,7 @@ package chitosocket
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"github.com/gobwas/ws"
 	"github.com/godzie44/go-uring/reactor"
 	"github.com/godzie44/go-uring/uring"
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/sairash/chitosocket/buffer"
 	"golang.org/x/sys/unix"
 )
@@ -44,7 +46,7 @@ func NewWithConfig(config Config) (*ChitoSocket, error) {
 		netReactor.Run(context.Background())
 	}()
 
-	cs := newChitoSocket(config.MaxShards, closeRings, netReactor)
+	cs := newChitoSocket(config.MaxShards, closeRings, netReactor, config.Server)
 	return cs, nil
 }
 
@@ -66,14 +68,22 @@ func (cs *ChitoSocket) UpgradeHTTP(r *http.Request, w http.ResponseWriter) error
 		return err
 	}
 
+	id, err := randomSessionKey(cs.ServerID)
+	if err != nil {
+		return err
+	}
+	fmt.Println(id)
+
 	s := Subscriber{
-		fd:      newConnFD,
+		fd: newConnFD,
+		id: id,
+
 		buffer:  buffer.NewBuffer(cache),
 		reactor: cs.Reactor,
 	}
 
 	s.isClosed.Store(false)
-	s.Capture()
+	go s.Capture()
 
 	return nil
 }
@@ -111,4 +121,24 @@ func detach(conn net.Conn) (int, error) {
 	}
 
 	return newFD, nil
+}
+
+func newChitoSocket(maxShards int, close uring.Defer, reactor *reactor.NetworkReactor, id int) *ChitoSocket {
+	if maxShards < 1 {
+		maxShards = 1
+	}
+
+	cs := &ChitoSocket{
+		Hubs:       make([]hub, maxShards),
+		CloseRings: close,
+		Reactor:    reactor,
+		count:      uint32(maxShards),
+		ServerID:   id,
+	}
+
+	for k := range cs.Hubs {
+		cs.Hubs[k] = xsync.NewMap[string, *Room]()
+	}
+
+	return cs
 }

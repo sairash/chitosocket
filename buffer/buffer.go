@@ -1,7 +1,6 @@
 package buffer
 
 import (
-	"fmt"
 	"io"
 )
 
@@ -29,7 +28,17 @@ func NewBuffer(b []byte) *Buffer {
 	}
 
 	buf.Buf = buf.getBuf(smallByte)
-	fmt.Println(cap(buf.Buf), len(buf.Buf))
+	return buf
+}
+
+func NewBufferWithLength(n int) *Buffer {
+	buf := new(Buffer)
+
+	if n <= 0 {
+		n = smallByte
+	}
+
+	buf.Buf = buf.getBuf(n)
 	return buf
 }
 
@@ -87,6 +96,13 @@ func (b *Buffer) Read(buf []byte) (int, error) {
 	n := copy(buf, unread)
 	b.R += n
 
+	return n, nil
+}
+
+func (b *Buffer) Write(buf []byte) (int, error) {
+	b.Grow(len(buf))
+	n := copy(b.Buf[b.W:], buf)
+	b.W += n
 	return n, nil
 }
 

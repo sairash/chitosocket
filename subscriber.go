@@ -71,6 +71,35 @@ func (s *Subscriber) PrintCurrentBuffer() {
 	fmt.Println("fin: ", f.Header.Fin, f.Header.OpCode, f.Header.Rsv, f.Header.Length)
 
 	s.buffer.R = required
+
+	unMaskBuffer(f.Payload, f.Header.Mask)
+	fmt.Println(string(f.Payload))
+	s.Write(f.Payload)
+}
+
+func (s *Subscriber) Write(p []byte) error {
+	frame := ws.NewTextFrame(p)
+	buf, err := ws.CompileFrame(frame)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	op := uring.Send(uintptr(s.fd), buf, 0)
+
+	fmt.Println(buf)
+
+	s.reactor.Queue(op, func(event uring.CQEvent) {
+		if err := event.Error(); err == nil {
+			return
+		}
+
+		if event.Res > 0 {
+			return
+		}
+		// if the buffer is not sent need to send it again
+	})
+	return nil
 }
 
 func (s *Subscriber) Close() error {
