@@ -3,7 +3,6 @@ package chitosocket
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"runtime"
@@ -72,19 +71,23 @@ func (cs *ChitoSocket) UpgradeHTTP(r *http.Request, w http.ResponseWriter) error
 	if err != nil {
 		return err
 	}
-	fmt.Println(id)
 
-	s := Subscriber{
-		fd: newConnFD,
+	s := &Subscriber{
+		fd: uint(newConnFD),
 		id: id,
 
-		buffer:  buffer.NewBuffer(cache),
-		reactor: cs.Reactor,
+		buffer:    buffer.NewBuffer(cache),
+		reactor:   cs.Reactor,
+		CloseChan: cs.subCloseChan,
 	}
+
+	cs.JoinRoom(id, s)
+	cs.subs.Store(s.fd, s)
 
 	s.isClosed.Store(false)
 	go s.Capture()
 
+	cs.Broadcast("s", []byte("New Connection just joined"))
 	return nil
 }
 
@@ -129,16 +132,69 @@ func newChitoSocket(maxShards int, close uring.Defer, reactor *reactor.NetworkRe
 	}
 
 	cs := &ChitoSocket{
-		Hubs:       make([]hub, maxShards),
-		CloseRings: close,
-		Reactor:    reactor,
-		count:      uint32(maxShards),
-		ServerID:   id,
+		Hubs:         make([]hub, maxShards),
+		CloseRings:   close,
+		Reactor:      reactor,
+		count:        uint32(maxShards),
+		ServerID:     id,
+		subs:         xsync.NewMap[uint, *Subscriber](),
+		subCloseChan: make(chan uint),
 	}
 
 	for k := range cs.Hubs {
-		cs.Hubs[k] = xsync.NewMap[string, *Room]()
+		cs.Hubs[k] = hub{
+			hub: xsync.NewMap[string, *Room](),
+		}
 	}
 
+	go func() {
+		for {
+			select {
+			case x := <-cs.subCloseChan:
+				cs.subs.Delete(x)
+			}
+		}
+	}()
 	return cs
+}
+
+func (cs *ChitoSocket) Broadcast(event string, data []byte) {
+	if event == "" {
+		return
+	}
+
+	cs.subs.RangeRelaxed(func(key uint, sub *Subscriber) bool {
+		sub.Write(data)
+		return true
+	})
+}
+
+func (cs *ChitoSocket) GetRoom(room string) (*Room, bool) {
+	shard := getShardFromString(room, cs.count)
+	return cs.Hubs[shard].hub.Load(room)
+}
+
+func (cs *ChitoSocket) JoinRoom(room string, s *Subscriber) error {
+	r, ok := cs.GetRoom(room)
+	if !ok {
+		return RoomNotAvailable
+	}
+	return r.Join(s)
+}
+
+func (cs *ChitoSocket) GetRoomCount(room string) int {
+	r, ok := cs.GetRoom(room)
+	if !ok {
+		return 0
+	}
+
+	return r.Count()
+}
+
+func (cs *ChitoSocket) GetRoomMembers(room string) []*Subscriber {
+	r, ok := cs.GetRoom(room)
+	if !ok {
+		return []*Subscriber{}
+	}
+	return r.Members()
 }

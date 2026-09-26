@@ -2,6 +2,7 @@ package chitosocket
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/gobwas/ws"
@@ -12,15 +13,18 @@ import (
 )
 
 type Subscriber struct {
-	fd    int
+	fd    uint
 	id    string
 	rooms []string
+	mu    sync.RWMutex
 
 	reactor *reactor.NetworkReactor
 
 	buffer *buffer.Buffer
 
 	isClosed atomic.Bool
+
+	CloseChan chan uint
 }
 
 func (s *Subscriber) Capture() {
@@ -34,8 +38,7 @@ func (s *Subscriber) Capture() {
 
 		err := event.Error()
 		if err != nil || event.Res == 0 {
-			unix.Close(s.fd)
-			s.isClosed.Store(true)
+			s.Close()
 			return
 		}
 
@@ -78,10 +81,8 @@ func (s *Subscriber) PrintCurrentBuffer() {
 }
 
 func (s *Subscriber) Write(p []byte) error {
-	frame := ws.NewTextFrame(p)
-	buf, err := ws.CompileFrame(frame)
+	buf, err := ws.CompileFrame(ws.NewTextFrame(p))
 	if err != nil {
-		fmt.Println(err)
 		return err
 	}
 
@@ -104,7 +105,10 @@ func (s *Subscriber) Write(p []byte) error {
 
 func (s *Subscriber) Close() error {
 	s.isClosed.Store(true)
-	err := unix.Close(s.fd)
+
+	err := unix.Close(int(s.fd))
+	s.CloseChan <- s.fd
+
 	if err != nil {
 		return err
 	}

@@ -14,12 +14,21 @@ type ChitoSocket struct {
 
 	count    uint32
 	ServerID int
+	subs     *xsync.Map[uint, *Subscriber]
+
+	subCloseChan chan uint
 }
 
-type hub *xsync.Map[string, *Room]
+type hub struct {
+	hub   *xsync.Map[string, *Room]
+	count uint32
+}
 
 // fd is going to be the key
-type Room *xsync.Map[uint, *Subscriber]
+type Room struct {
+	room *xsync.Map[uint, *Subscriber]
+	name string
+}
 
 type Config struct {
 	Server     int // new server must have a new server id
