@@ -61,11 +61,26 @@ func (r *Room) Members() []*Subscriber {
 	return s
 }
 
-func (r *Room) Send(msg []byte) {
+func (r *Room) Emit(msg []byte) {
+	capacity := r.Count()
+	errChan := make(chan error, capacity)
+	defer close(errChan)
+
+	fds := make([]uint, capacity)
+
+	i := 0
 	r.room.RangeRelaxed(func(k uint, s *Subscriber) bool {
-		s.Write(msg)
+		s.Write(msg, errChan)
+		fds[i] = s.fd
+		i++
 		return true
 	})
+
+	for i := 0; i < capacity; i++ {
+		x := <-errChan
+		if x != nil {
+		}
+	}
 }
 
 // we will have shards

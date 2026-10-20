@@ -88,6 +88,7 @@ func (cs *ChitoSocket) UpgradeHTTP(r *http.Request, w http.ResponseWriter) error
 	go s.Capture()
 
 	cs.Broadcast("s", []byte("New Connection just joined"))
+
 	return nil
 }
 
@@ -197,4 +198,14 @@ func (cs *ChitoSocket) GetRoomMembers(room string) []*Subscriber {
 		return []*Subscriber{}
 	}
 	return r.Members()
+}
+
+func (cs *ChitoSocket) Emit(room string, excludeSub *Subscriber, payload []byte) error {
+	r, ok := cs.GetRoom(room)
+	if !ok {
+		return RoomNotAvailable
+	}
+
+	r.Emit(payload)
+	return nil
 }

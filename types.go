@@ -1,6 +1,8 @@
 package chitosocket
 
 import (
+	"sync"
+
 	"github.com/godzie44/go-uring/reactor"
 
 	"github.com/godzie44/go-uring/uring"
@@ -24,11 +26,15 @@ type hub struct {
 	count uint32
 }
 
+var hubPool sync.Pool
+
 // fd is going to be the key
 type Room struct {
 	room *xsync.Map[uint, *Subscriber]
 	name string
 }
+
+var roomPool sync.Pool
 
 type Config struct {
 	Server     int // new server must have a new server id

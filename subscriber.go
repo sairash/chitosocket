@@ -80,27 +80,31 @@ func (s *Subscriber) PrintCurrentBuffer() {
 	s.Write(f.Payload)
 }
 
-func (s *Subscriber) Write(p []byte) error {
+func (s *Subscriber) Write(p []byte, errChan chan error) {
 	buf, err := ws.CompileFrame(ws.NewTextFrame(p))
 	if err != nil {
-		return err
+		errChan <- err
+		return
 	}
 
 	op := uring.Send(uintptr(s.fd), buf, 0)
 
-	fmt.Println(buf)
-
 	s.reactor.Queue(op, func(event uring.CQEvent) {
-		if err := event.Error(); err == nil {
+		err := event.Error()
+
+		if err == nil {
+			errChan <- nil
 			return
 		}
 
 		if event.Res > 0 {
+			errChan <- nil
 			return
 		}
 		// if the buffer is not sent need to send it again
+		errChan <- err
 	})
-	return nil
+	return
 }
 
 func (s *Subscriber) Close() error {
